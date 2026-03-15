@@ -1,0 +1,208 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  tbs-app-chat
+
+  Sample SAM Template for tbs-app-chat
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    LoggingConfig:
+      QueryReservedConcurrency: 1
+      LogFormat: JSON
+
+Parameters:
+  QueryReservedConcurrency:
+    Type: String
+    Default: 1
+
+  QueryLoggingLevel:
+    Type: String
+    Default: DEBUG
+    AllowedValues: [DEBUG, INFO, WARN, ERROR, FATAL]
+
+  BedrockModel:
+    Type: String
+    Default: us.anthropic.claude-sonnet-4-5-20250514-v1:0
+
+  MaxTokens:
+    Type: String
+    Default: 1024
+
+Resources:
+
+  LambdaExcecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: !Sub ${AWS::StackName}-BedrockPolicies
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: BedrockPolicy
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: "*"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+
+  QueryFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: ./
+      Handler: index.handler
+      Runtime: nodejs24.x
+      Architectures:
+      - x86_64
+      MemorySize: 1024
+      Timeout: 100
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
+      ReservedConcurrentExecutions: !Ref QueryReservedConcurrency
+      LoggingConfig:
+        LogGroup: !Ref QueryFunctionLogGroup
+        LogFormat: JSON
+        ApplicationLogLevel: !Ref QueryLoggingLevel
+      Description: Invoke GenAI queries against bedrock model
+      Environment:
+        Variables:
+          BEDROCK_MODEL: !Ref BedrockModel
+          MAX_TOKENS: !Ref MaxTokens
+    Metadata: # Manage esbuild properties
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+        - src/application/command-handlers/query/index.ts
+
+  QueryFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-QueryFunction"
+      RetentionInDays: 30
+
+  ApiGwAccessLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ["", ["API-Gateway-Access-Logs_", !Sub "${AWS::StackName}"]]
+      RetentionInDays: 365
+
+  QueryFunctionApiGatewayInvoke:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref "QueryFunction.Alias"
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatApi}/*"
+
+  ChatApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      EndpointConfiguration: REGIONAL
+      MinimumCompressionSize: 0
+      TracingEnabled: true
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiGwAccessLogs.Arn
+        Format: >
+          {"requestTimeEpoch": $context.requestTimeEpoch, "requestId":"$context.requestId",
+          "httpMethod": "$context.httpMethod", "path":"$context.path", "resourcePath": "$context.resourcePath",
+          "status": "$context.status",
+          "lambdaRequestId": "$context.integration.requestId", "integrationStatus": "$context.integration.status",
+          "xrayTraceId": "$context.xrayTraceId", "responseLatency": $context.responseLatency,
+          "integrationLatency": "$context.integrationLatency", "error": "$context.error.message",
+          "userAgent": "$context.identity.userAgent", "sourceIp": "$context.identity.sourceIp"}
+      MethodSettings:
+        - HttpMethod: "*"
+          ResourcePath: "/*"
+          DataTraceEnabled: false
+          MetricsEnabled: true # Enable detailed metrics (error 404, latence, ...)
+          ThrottlingRateLimit: 10
+          ThrottlingBurstLimit: 10
+          LoggingLevel: ERROR
+      OpenApiVersion: 3.0.1
+      DefinitionBody:
+        openapi: "3.0.1"
+        info:
+          title: !Sub "${AWS::StackName}-api"
+          version: "2021-06-10T02:04:23Z"
+        paths:
+          /query:
+            post:
+              responses:
+                "200":
+                  description: "Event post successfully handled and placed on queue"
+                "400":
+                  description: Bad request
+                "500":
+                  description: Server Error
+              security:
+                - TbsUser: [ ]
+              x-amazon-apigateway-integration:
+                httpMethod: "POST"
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${QueryFunction.Arn}:live/invocations"
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Strict-Transport-Security: "'max-age=31536000; includeSubdomains; preload'"
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                passthroughBehavior: "when_no_match"
+                type: "aws_proxy"
+
+            options:
+              consumes:
+                - "application/json"
+              produces:
+                - "application/json"
+              responses:
+                "200":
+                  description: "200 response"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+                    Access-Control-Allow-Methods:
+                      type: "string"
+                    Access-Control-Allow-Headers:
+                      type: "string"
+                    Strict-Transport-Security:
+                      type: "string"
+                    X-Frame-Options:
+                      type: "string"
+                    Content-Security-Policy:
+                      type: "string"
+              x-amazon-apigateway-integration:
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Methods: "'GET,POST,PATCH,PUT,DELETE,OPTIONS'"
+                      method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                      method.response.header.Strict-Transport-Security: "'max-age=31536000; includeSubdomains; preload'"
+                      method.response.header.X-Frame-Options: "'DENY'"
+                      method.response.header.Content-Security-Policy: "'default-src \"none\"; frame-ancestors \"none\"'"
+                requestTemplates:
+                  application/json: "{\"statusCode\": 200}"
+                passthroughBehavior: "when_no_match"
+                type: "mock"
+Outputs:
+  QueryFunctionArn:
+    Description: Query Lambda Function ARN
+    Value: !GetAtt QueryFunction.Arn
+
