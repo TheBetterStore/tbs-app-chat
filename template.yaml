@@ -9,10 +9,19 @@ Description: >
 Globals:
   Function:
     LoggingConfig:
-      QueryReservedConcurrency: 1
       LogFormat: JSON
 
 Parameters:
+  Environment:
+    Type: String
+    Default: prod
+
+  AppLoginCFName:
+    Type: String
+
+  InfraBaseCFName:
+    Type: String
+
   QueryReservedConcurrency:
     Type: String
     Default: 1
@@ -147,6 +156,13 @@ Resources:
               responses:
                 "200":
                   description: "Event post successfully handled and placed on queue"
+                  headers:
+                    Strict-Transport-Security:
+                      schema:
+                        type: "string"
+                    Access-Control-Allow-Origin:
+                      schema:
+                        type: "string"
                 "400":
                   description: Bad request
                 "500":
@@ -201,6 +217,41 @@ Resources:
                   application/json: "{\"statusCode\": 200}"
                 passthroughBehavior: "when_no_match"
                 type: "mock"
+
+        securityDefinitions:
+          TbsUser:
+            type: "apiKey"
+            name: "Authorization"
+            in: "header"
+            x-amazon-apigateway-authtype: "cognito_user_pools"
+            x-amazon-apigateway-authorizer:
+              providerARNs:
+                - Fn::ImportValue: !Sub ${AppLoginCFName}:UserPoolArn
+              type: "cognito_user_pools"
+        x-amazon-apigateway-gateway-responses:
+          DEFAULT_5XX:
+            responseParameters:
+              gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS,POST'"
+              gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+              gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+          DEFAULT_4XX:
+            responseParameters:
+              gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS,POST'"
+              gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+              gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        x-amazon-apigateway-minimum-compression-size: 0
+
+  ApiBasePathMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    DependsOn:
+      - ChatApi
+    Properties:
+      DomainName:
+        Fn::ImportValue: !Sub ${InfraBaseCFName}:ApiGwCustomDomain:Name
+      ApiId: !Ref ChatApi
+      Stage: !Ref ChatApi.Stage
+      ApiMappingKey: "chat/v1"
+
 Outputs:
   QueryFunctionArn:
     Description: Query Lambda Function ARN
