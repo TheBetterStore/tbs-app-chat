@@ -33,11 +33,20 @@ Parameters:
 
   BedrockModel:
     Type: String
-    Default: us.anthropic.claude-sonnet-4-5-20250514-v1:0
+    Default: apac.anthropic.claude-sonnet-4-5-20250514-v1:0
 
   MaxTokens:
     Type: String
     Default: 1024
+
+  AllowedCorsDomains:
+    Type: String
+    Description: Define allowed client UI domains here. Use commas to separate if multiple.
+    Default: 'http://localhost:4200,https://thebetterstore.net'
+
+  SystemPrompt:
+    Type: String
+    Default: 'You are a helpful shopping assistant for The Better Store, an electronics and books retailer. Keep responses brief. Use the lookup_inventory tool to check product availability when asked about products.'
 
 Resources:
 
@@ -81,6 +90,7 @@ Resources:
       DeploymentPreference:
         Type: AllAtOnce
       ReservedConcurrentExecutions: !Ref QueryReservedConcurrency
+      Role: !GetAtt LambdaExcecutionRole.Arn
       LoggingConfig:
         LogGroup: !Ref QueryFunctionLogGroup
         LogFormat: JSON
@@ -90,6 +100,9 @@ Resources:
         Variables:
           BEDROCK_MODEL: !Ref BedrockModel
           MAX_TOKENS: !Ref MaxTokens
+          SYSTEM_PROMPT: !Ref SystemPrompt
+          ALLOWED_CORS_DOMAINS: !Ref AllowedCorsDomains
+          PRODUCTS_API_BASE_URL: "https://api.thebetterstore.net/product/v1"
     Metadata: # Manage esbuild properties
       BuildMethod: esbuild
       BuildProperties:

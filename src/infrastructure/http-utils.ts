@@ -1,3 +1,5 @@
+import {APIGatewayProxyResult} from "aws-lambda";
+
 /**
  * HttpUtils; provides helper functions for building http responses
  */
@@ -35,7 +37,7 @@ export class HttpUtils {
    * @param {any} headers
    * @return {object}
    */
-  static buildJsonResponse(statusCode: number, body: object, requestOrigin: string, headers?: any): object {
+  static buildJsonResponse(statusCode: number, body: object, requestOrigin: string, headers?: any): APIGatewayProxyResult {
     if (!headers) {
       headers = {};
     }
