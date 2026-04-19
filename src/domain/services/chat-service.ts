@@ -23,7 +23,12 @@ const tools = [
             brandId: {
               type: 'string',
               description:
-                'Optional brand name to filter by (e.g. ASUS, Dell, Apple, Lenovo, HP, Samsung, Microsoft, Acer, Razer, MSI)',
+                'Optional brand name to filter by (e.g. ASUS, Dell, Apple, Lenovo, HP, Samsung, Microsoft, Acer, Razer, MSI, Penguin Books, HarperCollins, Bloomsbury)',
+            },
+            category: {
+              type: 'string',
+              description: 'Optional product category to filter by',
+              enum: ['BOOKS', 'COMPUTERS', 'MOBILE'],
             },
           },
         },
@@ -66,11 +71,12 @@ export class ChatService implements IChatService {
       const assistantMsg = response.output!.message!;
       messages.push(assistantMsg);
 
+      console.debug(JSON.stringify(assistantMsg));
       const toolResults: any[] = [];
       for (const block of assistantMsg.content || []) {
         if (block.toolUse) {
           const input = block.toolUse.input as any;
-          const items = await self.inventoryService.lookupInventory(input?.productName, input?.brandId);
+          const items = await self.inventoryService.lookupInventory(input?.productName, input?.brandId, input?.category);
           toolResults.push({
             toolResult: {
               toolUseId: block.toolUse.toolUseId,
