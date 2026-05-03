@@ -43,3 +43,40 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     return HttpUtils.buildJsonResponse(200, res, event?.headers?.origin + '');
 
 };
+
+import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
+
+export const wsHandler = async (event: any) => {
+    const { routeKey, requestContext } = event;
+    const connectionId = requestContext.connectionId;
+
+    if (routeKey === '$connect' || routeKey === '$disconnect') {
+        return { statusCode: 200 };
+    }
+
+    await containerReady;
+
+    const endpoint = `https://${requestContext.domainName}/${requestContext.stage}`;
+    const apigw = new ApiGatewayManagementApiClient({ endpoint });
+    const send = (data: object) =>
+        apigw.send(new PostToConnectionCommand({
+            ConnectionId: connectionId,
+            Data: Buffer.from(JSON.stringify(data)),
+        }));
+
+    try {
+        const body = JSON.parse(event.body);
+        const svc = container.get<IChatService>(TYPES.IChatService);
+
+        await svc.queryStream(body, async (text: string) => {
+            await send({ text });
+        });
+
+        await send({ done: true });
+    } catch (err) {
+        console.error('WebSocket stream error:', err);
+        await send({ error: 'Internal error' });
+    }
+
+    return { statusCode: 200 };
+};
