@@ -109,34 +109,35 @@ export class ChatService implements IChatService {
       messages.push(assistantMsg);
 
       console.debug(JSON.stringify(assistantMsg));
-      const toolResults: any[] = [];
-      for (const block of assistantMsg.content || []) {
-        if (block.toolUse) {
-          const input = block.toolUse.input as any;
-          let result: any;
+      const toolResults = await Promise.all(
+        (assistantMsg.content || [])
+          .filter((block) => block.toolUse)
+          .map(async (block) => {
+            const input = block.toolUse!.input as any;
+            let result: any;
 
-          if (block.toolUse.name === 'get_book_info') {
-            result = await this.getBookInfo(input.query);
-          } else if (block.toolUse.name === 'get_computer_reviews') {
-            result = await this.getComputerReviews(input.query);
-          } else {
-            result = {
-              products: await this.inventoryService.lookupInventory(
-                input?.productName,
-                input?.brandId,
-                input?.category,
-              ),
+            if (block.toolUse!.name === 'get_book_info') {
+              result = await this.getBookInfo(input.query);
+            } else if (block.toolUse!.name === 'get_computer_reviews') {
+              result = await this.getComputerReviews(input.query);
+            } else {
+              result = {
+                products: await this.inventoryService.lookupInventory(
+                  input?.productName,
+                  input?.brandId,
+                  input?.category,
+                ),
+              };
+            }
+
+            return {
+              toolResult: {
+                toolUseId: block.toolUse!.toolUseId,
+                content: [{ json: result }],
+              },
             };
-          }
-
-          toolResults.push({
-            toolResult: {
-              toolUseId: block.toolUse.toolUseId,
-              content: [{ json: result }],
-            },
-          });
-        }
-      }
+          }),
+      );
 
       messages.push({ role: 'user', content: toolResults });
       response = await converse();
