@@ -2,7 +2,7 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import {IChatService} from "../../../domain/interfaces/chat-service.interface";
 import 'reflect-metadata';
 import TYPES from '../../../infrastructure/types';
-import container from './container';
+import container, {initContainer} from './container';
 import {HttpUtils} from "../../../infrastructure/http-utils";
 import {IClaims} from "../../../domain/models/claims.interface";
 
@@ -17,8 +17,10 @@ import {IClaims} from "../../../domain/models/claims.interface";
  */
 
 console.info('Lambda is cold-starting.');
+const containerReady = initContainer();
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+    await containerReady;
     console.info('Entered handler');
     console.debug(JSON.stringify(event));
 
@@ -40,4 +42,48 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     const res = await svc.query(messages);
     return HttpUtils.buildJsonResponse(200, res, event?.headers?.origin + '');
 
+};
+
+import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
+
+export const wsHandler = async (event: any) => {
+    const { routeKey, requestContext } = event;
+    const connectionId = requestContext.connectionId;
+
+    if (routeKey === '$connect' || routeKey === '$disconnect') {
+        return { statusCode: 200 };
+    }
+
+    // Verify authorizer context is present (set during $connect by the Lambda authorizer)
+    const username = requestContext.authorizer?.username;
+    if (!username || username !== 'brycepc@hotmail.com') {
+        console.warn('Unauthorized WebSocket message from connection:', connectionId);
+        return { statusCode: 403 };
+    }
+
+    await containerReady;
+
+    const endpoint = `https://${requestContext.domainName}/${requestContext.stage}`;
+    const apigw = new ApiGatewayManagementApiClient({ endpoint });
+    const send = (data: object) =>
+        apigw.send(new PostToConnectionCommand({
+            ConnectionId: connectionId,
+            Data: Buffer.from(JSON.stringify(data)),
+        }));
+
+    try {
+        const body = JSON.parse(event.body);
+        const svc = container.get<IChatService>(TYPES.IChatService);
+
+        await svc.queryStream(body, async (text: string) => {
+            await send({ text });
+        });
+
+        await send({ done: true });
+    } catch (err) {
+        console.error('WebSocket stream error:', err);
+        await send({ error: 'Internal error' });
+    }
+
+    return { statusCode: 200 };
 };

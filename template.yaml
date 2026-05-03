@@ -3,14 +3,6 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   tbs-app-chat
 
-  Sample SAM Template for tbs-app-chat
-
-# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
-Globals:
-  Function:
-    LoggingConfig:
-      LogFormat: JSON
-
 Parameters:
   Environment:
     Type: String
@@ -20,6 +12,9 @@ Parameters:
     Type: String
 
   InfraBaseCFName:
+    Type: String
+
+  KmsCFStackName:
     Type: String
 
   QueryReservedConcurrency:
@@ -48,6 +43,15 @@ Parameters:
     Type: String
     Default: 'You are a helpful shopping assistant for The Better Store, an electronics and books retailer. Keep responses brief. Use the lookup_inventory tool to check product availability when asked about products.'
 
+  BraveApiKeyParam:
+    Type: String
+    Description: SSM Parameter Store param for Brave API key
+
+  AllowedUser:
+    Type: String
+    Default: 'brycepc@hotmail.com'
+    Description: Allowed username for WebSocket access
+
 Resources:
 
   LambdaExcecutionRole:
@@ -64,7 +68,7 @@ Resources:
             Action:
               - "sts:AssumeRole"
       Policies:
-        - PolicyName: !Sub ${AWS::StackName}-BedrockPolicies
+        - PolicyName: !Sub ${AWS::StackName}-Policies
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
@@ -72,7 +76,24 @@ Resources:
                 Effect: Allow
                 Action:
                   - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
                 Resource: "*"
+              - Sid: KmsPolicy
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource:
+                  Fn::ImportValue: !Sub ${KmsCFStackName}:InternalKmsKey:Arn
+              - Sid: SsmPolicy
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BraveApiKeyParam}"
+              - Sid: WebSocketPostPolicy
+                Effect: Allow
+                Action:
+                  - execute-api:ManageConnections
+                Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatWebSocketApi}/*"
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 
@@ -103,6 +124,8 @@ Resources:
           SYSTEM_PROMPT: !Ref SystemPrompt
           ALLOWED_CORS_DOMAINS: !Ref AllowedCorsDomains
           PRODUCTS_API_BASE_URL: "https://api.thebetterstore.net/product/v1"
+          BRAVE_API_KEY_PARAM: !Ref BraveApiKeyParam
+          NODE_OPTIONS: "--enable-source-maps"
     Metadata: # Manage esbuild properties
       BuildMethod: esbuild
       BuildProperties:
@@ -117,6 +140,161 @@ Resources:
     Properties:
       LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-QueryFunction"
       RetentionInDays: 30
+
+  QueryStreamFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: index.wsHandler
+      Runtime: nodejs24.x
+      Architectures:
+      - x86_64
+      MemorySize: 1024
+      Timeout: 30
+      ReservedConcurrentExecutions: !Ref QueryReservedConcurrency
+      Role: !GetAtt LambdaExcecutionRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref QueryStreamFunctionLogGroup
+        LogFormat: JSON
+        ApplicationLogLevel: !Ref QueryLoggingLevel
+      Description: Stream GenAI responses via WebSocket
+      Environment:
+        Variables:
+          BEDROCK_MODEL: !Ref BedrockModel
+          MAX_TOKENS: !Ref MaxTokens
+          SYSTEM_PROMPT: !Ref SystemPrompt
+          ALLOWED_CORS_DOMAINS: !Ref AllowedCorsDomains
+          PRODUCTS_API_BASE_URL: "https://api.thebetterstore.net/product/v1"
+          BRAVE_API_KEY_PARAM: !Ref BraveApiKeyParam
+          NODE_OPTIONS: "--enable-source-maps"
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+        - src/application/command-handlers/query/index.ts
+
+  QueryStreamFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-QueryStreamFunction"
+      RetentionInDays: 30
+
+  WsAuthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: index.handler
+      Runtime: nodejs24.x
+      Architectures:
+      - x86_64
+      MemorySize: 1024
+      Timeout: 30
+      ReservedConcurrentExecutions: !Ref QueryReservedConcurrency
+      Role: !GetAtt LambdaExcecutionRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref WsAuthFunctionLogGroup
+        LogFormat: JSON
+        ApplicationLogLevel: !Ref QueryLoggingLevel
+      Description: WebSocket $connect authorizer
+      Environment:
+        Variables:
+          USER_POOL_ID:
+            Fn::ImportValue: !Sub ${AppLoginCFName}:UserPoolId
+          USER_POOL_CLIENT_ID:
+            Fn::ImportValue: !Sub ${AppLoginCFName}:UserPoolWebClientId
+          ALLOWED_CORS_DOMAINS: !Ref AllowedCorsDomains
+          ALLOWED_USER: !Ref AllowedUser
+          NODE_OPTIONS: "--enable-source-maps"
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+        - src/application/command-handlers/ws-authorizer/index.ts
+
+  WsAuthFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-WsAuthFunction"
+      RetentionInDays: 30
+
+  WsAuthLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref WsAuthFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatWebSocketApi}/*"
+
+  ChatWebSocketApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${AWS::StackName}-ws"
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: "$request.body.action"
+
+  WebSocketAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref ChatWebSocketApi
+      AuthorizerType: REQUEST
+      AuthorizerUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsAuthFunction.Arn}/invocations"
+      Name: CognitoWsAuthorizer
+      IdentitySource:
+        - "route.request.querystring.token"
+
+  ConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ChatWebSocketApi
+      RouteKey: "$connect"
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref WebSocketAuthorizer
+      Target: !Sub "integrations/${WebSocketIntegration}"
+
+  DisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ChatWebSocketApi
+      RouteKey: "$disconnect"
+      Target: !Sub "integrations/${WebSocketIntegration}"
+
+  SendMessageRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ChatWebSocketApi
+      RouteKey: "sendMessage"
+      Target: !Sub "integrations/${WebSocketIntegration}"
+
+  WebSocketIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ChatWebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${QueryStreamFunction.Arn}/invocations"
+
+  WebSocketStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref ChatWebSocketApi
+      StageName: Prod
+      AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingRateLimit: 10
+        ThrottlingBurstLimit: 10
+
+  WebSocketLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref QueryStreamFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatWebSocketApi}/*"
 
   ApiGwAccessLogs:
     Type: AWS::Logs::LogGroup
@@ -269,4 +447,8 @@ Outputs:
   QueryFunctionArn:
     Description: Query Lambda Function ARN
     Value: !GetAtt QueryFunction.Arn
+
+  QueryStreamWebSocketUrl:
+    Description: WebSocket URL for streaming queries
+    Value: !Sub "wss://${ChatWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
 

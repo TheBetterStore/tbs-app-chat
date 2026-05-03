@@ -1,3 +1,3 @@
 export interface IInventoryService {
-  lookupInventory(productName?: string, brandId?: string): Promise<any[]>;
+  lookupInventory(productName?: string, brandId?: string, category?: string): Promise<any[]>;
 }
