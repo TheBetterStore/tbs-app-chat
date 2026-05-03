@@ -2,7 +2,7 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import {IChatService} from "../../../domain/interfaces/chat-service.interface";
 import 'reflect-metadata';
 import TYPES from '../../../infrastructure/types';
-import container from './container';
+import container, {initContainer} from './container';
 import {HttpUtils} from "../../../infrastructure/http-utils";
 import {IClaims} from "../../../domain/models/claims.interface";
 
@@ -17,8 +17,10 @@ import {IClaims} from "../../../domain/models/claims.interface";
  */
 
 console.info('Lambda is cold-starting.');
+const containerReady = initContainer();
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+    await containerReady;
     console.info('Entered handler');
     console.debug(JSON.stringify(event));
 

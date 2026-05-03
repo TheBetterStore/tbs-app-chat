@@ -3,14 +3,6 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   tbs-app-chat
 
-  Sample SAM Template for tbs-app-chat
-
-# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
-Globals:
-  Function:
-    LoggingConfig:
-      LogFormat: JSON
-
 Parameters:
   Environment:
     Type: String
@@ -20,6 +12,9 @@ Parameters:
     Type: String
 
   InfraBaseCFName:
+    Type: String
+
+  KmsCFStackName:
     Type: String
 
   QueryReservedConcurrency:
@@ -48,6 +43,10 @@ Parameters:
     Type: String
     Default: 'You are a helpful shopping assistant for The Better Store, an electronics and books retailer. Keep responses brief. Use the lookup_inventory tool to check product availability when asked about products.'
 
+  BraveApiKeyParam:
+    Type: String
+    Description: SSM Parameter Store param for Brave API key
+
 Resources:
 
   LambdaExcecutionRole:
@@ -64,7 +63,7 @@ Resources:
             Action:
               - "sts:AssumeRole"
       Policies:
-        - PolicyName: !Sub ${AWS::StackName}-BedrockPolicies
+        - PolicyName: !Sub ${AWS::StackName}-Policies
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
@@ -73,6 +72,17 @@ Resources:
                 Action:
                   - bedrock:InvokeModel
                 Resource: "*"
+              - Sid: KmsPolicy
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource:
+                  Fn::ImportValue: !Sub ${KmsCFStackName}:InternalKmsKey:Arn
+              - Sid: SsmPolicy
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BraveApiKeyParam}"
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 
@@ -103,6 +113,8 @@ Resources:
           SYSTEM_PROMPT: !Ref SystemPrompt
           ALLOWED_CORS_DOMAINS: !Ref AllowedCorsDomains
           PRODUCTS_API_BASE_URL: "https://api.thebetterstore.net/product/v1"
+          BRAVE_API_KEY_PARAM: !Ref BraveApiKeyParam
+          NODE_OPTIONS: "--enable-source-maps"
     Metadata: # Manage esbuild properties
       BuildMethod: esbuild
       BuildProperties:

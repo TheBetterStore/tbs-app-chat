@@ -35,6 +35,44 @@ const tools = [
       },
     },
   },
+  {
+    toolSpec: {
+      name: 'get_computer_reviews',
+      description:
+        'Search for reviews and opinions about a specific computer or laptop. Use when the user asks about reviews for a computer product.',
+      inputSchema: {
+        json: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'Computer or laptop name/model to search reviews for',
+            },
+          },
+          required: ['query'],
+        },
+      },
+    },
+  },
+  {
+    toolSpec: {
+      name: 'get_book_info',
+      description:
+        'Search for book information including ratings and reviews from Open Libary. Use when the user asks about a book.',
+      inputSchema: {
+        json: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'Book title or author to search for',
+            },
+          },
+          required: ['query'],
+        },
+      },
+    },
+  },
 ];
 
 @injectable()
@@ -44,12 +82,11 @@ export class ChatService implements IChatService {
     @inject(TYPES.BedrockModel) private bedrockModel: string,
     @inject(TYPES.MaxTokens) private maxTokens: string,
     @inject(TYPES.SystemPrompt) private systemPrompt: string,
+    @inject(TYPES.BraveApiKey) private braveApiKey: string,
   ) {}
 
   async query(messages: Message[]): Promise<any> {
     console.info('querying against model: ' + this.bedrockModel, messages);
-
-    const self = this;
 
     const converse = () =>
       client.send(
@@ -58,7 +95,7 @@ export class ChatService implements IChatService {
           messages,
           system: [
             {
-              text: self.systemPrompt,
+              text: this.systemPrompt,
             },
           ],
           toolConfig: { tools },
@@ -76,11 +113,26 @@ export class ChatService implements IChatService {
       for (const block of assistantMsg.content || []) {
         if (block.toolUse) {
           const input = block.toolUse.input as any;
-          const items = await self.inventoryService.lookupInventory(input?.productName, input?.brandId, input?.category);
+          let result: any;
+
+          if (block.toolUse.name === 'get_book_info') {
+            result = await this.getBookInfo(input.query);
+          } else if (block.toolUse.name === 'get_computer_reviews') {
+            result = await this.getComputerReviews(input.query);
+          } else {
+            result = {
+              products: await this.inventoryService.lookupInventory(
+                input?.productName,
+                input?.brandId,
+                input?.category,
+              ),
+            };
+          }
+
           toolResults.push({
             toolResult: {
               toolUseId: block.toolUse.toolUseId,
-              content: [{ json: { products: items } }],
+              content: [{ json: result }],
             },
           });
         }
@@ -92,5 +144,44 @@ export class ChatService implements IChatService {
 
     console.info('response', JSON.stringify(response));
     return response;
+  }
+
+  async getComputerReviews(query: string) {
+    const res = await fetch(
+      `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query + ' review')}&count=5`,
+      {
+        headers: {
+          Accept: 'application/json',
+          'Accept-Encoding': 'gzip',
+          'X-Subscription-Token': this.braveApiKey,
+        },
+      },
+    );
+    if (!res.ok) {
+      return { error: `Review service unavailable (HTTP ${res.status}). Unable to fetch reviews at this time.` };
+    }
+    const data = await res.json();
+    return { results: (data.web?.results || []).map((result: any) => ({
+      title: result.title,
+      url: result.url,
+      description: result.description,
+    })) };
+  }
+
+  async getBookInfo(query: string) {
+    const res = await fetch(
+      `https://openlibrary.org/search.json?q=${encodeURIComponent(
+        query,
+      )}&limit=3&fields=title,author_name,first_publish_year,ratings_average,ratings_count,subject`,
+    );
+    const data = await res.json();
+    return { results: data.docs.map((doc: any) => ({
+      title: doc.title,
+      authors: doc.author_name,
+      year: doc.first_publish_year,
+      avgRating: doc.ratings_average,
+      ratingsCount: doc.ratings_count,
+      subjects: doc.subject?.slice(0, 5),
+    })) };
   }
 }
