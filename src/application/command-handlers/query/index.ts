@@ -54,6 +54,13 @@ export const wsHandler = async (event: any) => {
         return { statusCode: 200 };
     }
 
+    // Verify authorizer context is present (set during $connect by the Lambda authorizer)
+    const username = requestContext.authorizer?.username;
+    if (!username || username !== 'brycepc@hotmail.com') {
+        console.warn('Unauthorized WebSocket message from connection:', connectionId);
+        return { statusCode: 403 };
+    }
+
     await containerReady;
 
     const endpoint = `https://${requestContext.domainName}/${requestContext.stage}`;

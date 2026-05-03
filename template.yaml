@@ -47,6 +47,11 @@ Parameters:
     Type: String
     Description: SSM Parameter Store param for Brave API key
 
+  AllowedUser:
+    Type: String
+    Default: 'brycepc@hotmail.com'
+    Description: Allowed username for WebSocket access
+
 Resources:
 
   LambdaExcecutionRole:
@@ -145,7 +150,7 @@ Resources:
       Architectures:
       - x86_64
       MemorySize: 1024
-      Timeout: 120
+      Timeout: 30
       ReservedConcurrentExecutions: !Ref QueryReservedConcurrency
       Role: !GetAtt LambdaExcecutionRole.Arn
       LoggingConfig:
@@ -177,6 +182,55 @@ Resources:
       LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-QueryStreamFunction"
       RetentionInDays: 30
 
+  WsAuthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: index.handler
+      Runtime: nodejs24.x
+      Architectures:
+      - x86_64
+      MemorySize: 1024
+      Timeout: 30
+      ReservedConcurrentExecutions: !Ref QueryReservedConcurrency
+      Role: !GetAtt LambdaExcecutionRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref WsAuthFunctionLogGroup
+        LogFormat: JSON
+        ApplicationLogLevel: !Ref QueryLoggingLevel
+      Description: WebSocket $connect authorizer
+      Environment:
+        Variables:
+          USER_POOL_ID:
+            Fn::ImportValue: !Sub ${AppLoginCFName}:UserPoolId
+          USER_POOL_CLIENT_ID:
+            Fn::ImportValue: !Sub ${AppLoginCFName}:UserPoolWebClientId
+          ALLOWED_CORS_DOMAINS: !Ref AllowedCorsDomains
+          ALLOWED_USER: !Ref AllowedUser
+          NODE_OPTIONS: "--enable-source-maps"
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+        - src/application/command-handlers/ws-authorizer/index.ts
+
+  WsAuthFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-WsAuthFunction"
+      RetentionInDays: 30
+
+  WsAuthLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref WsAuthFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatWebSocketApi}/*"
+
   ChatWebSocketApi:
     Type: AWS::ApiGatewayV2::Api
     Properties:
@@ -184,11 +238,23 @@ Resources:
       ProtocolType: WEBSOCKET
       RouteSelectionExpression: "$request.body.action"
 
+  WebSocketAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref ChatWebSocketApi
+      AuthorizerType: REQUEST
+      AuthorizerUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsAuthFunction.Arn}/invocations"
+      Name: CognitoWsAuthorizer
+      IdentitySource:
+        - "route.request.querystring.token"
+
   ConnectRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref ChatWebSocketApi
       RouteKey: "$connect"
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref WebSocketAuthorizer
       Target: !Sub "integrations/${WebSocketIntegration}"
 
   DisconnectRoute:
@@ -218,6 +284,9 @@ Resources:
       ApiId: !Ref ChatWebSocketApi
       StageName: Prod
       AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingRateLimit: 10
+        ThrottlingBurstLimit: 10
 
   WebSocketLambdaPermission:
     Type: AWS::Lambda::Permission
