@@ -106,7 +106,7 @@ Resources:
       Architectures:
       - x86_64
       MemorySize: 1024
-      Timeout: 100
+      Timeout: 30
       AutoPublishAlias: live
       DeploymentPreference:
         Type: AllAtOnce

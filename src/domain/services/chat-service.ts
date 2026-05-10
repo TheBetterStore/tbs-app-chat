@@ -108,8 +108,9 @@ export class ChatService implements IChatService {
       client.send(new ConverseCommand({ ...this.converseParams, messages }));
 
     let response = await converse();
+    let iterations = 0; // Use as a loop guard
 
-    while (response.stopReason === 'tool_use') {
+    while (response.stopReason === 'tool_use' && iterations++ < 5) {
       const assistantMsg = response.output!.message!;
       messages.push(assistantMsg);
       console.debug(JSON.stringify(assistantMsg));
