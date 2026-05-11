@@ -443,6 +443,78 @@ Resources:
       Stage: !Ref ChatApi.Stage
       ApiMappingKey: "chat/v1"
 
+  # --- AgentCore Runtime (Option B) ---
+
+  AgentCoreRuntimeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub ${AWS::StackName}-AgentCoreRuntimePolicies
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: BedrockPolicy
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: "*"
+              - Sid: SsmPolicy
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BraveApiKeyParam}"
+              - Sid: KmsPolicy
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource:
+                  Fn::ImportValue: !Sub ${KmsCFStackName}:InternalKmsKey:Arn
+              - Sid: EcrPolicy
+                Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+
+  ChatAgentRuntime:
+    Type: AWS::BedrockAgentCore::Runtime
+    Properties:
+      AgentRuntimeName: "tbs_app_chat_Runtime"
+      Description: "TBS Chat Agent - AgentCore Runtime"
+      AgentRuntimeArtifact:
+        ContainerConfiguration:
+          ContainerUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/tbs-chat-agent:latest"
+      NetworkConfiguration:
+        NetworkMode: PUBLIC
+      RoleArn: !GetAtt AgentCoreRuntimeRole.Arn
+      ProtocolConfiguration: HTTP
+      EnvironmentVariables:
+        BEDROCK_MODEL: !Ref BedrockModel
+        MAX_TOKENS: !Ref MaxTokens
+        SYSTEM_PROMPT: !Ref SystemPrompt
+        PRODUCTS_API_BASE_URL: "https://api.thebetterstore.net/product/v1"
+        BRAVE_API_KEY_PARAM: !Ref BraveApiKeyParam
+      LifecycleConfiguration:
+        IdleRuntimeSessionTimeout: 900
+        MaxLifetime: 14400
+
+  ChatAgentEndpoint:
+    Type: AWS::BedrockAgentCore::RuntimeEndpoint
+    Properties:
+      AgentRuntimeId: !GetAtt ChatAgentRuntime.AgentRuntimeId
+      Name: "tbs_app_chat_Endpoint"
+      Description: "Production inference endpoint for TBS Chat"
+
 Outputs:
   QueryFunctionArn:
     Description: Query Lambda Function ARN
@@ -451,4 +523,12 @@ Outputs:
   QueryStreamWebSocketUrl:
     Description: WebSocket URL for streaming queries
     Value: !Sub "wss://${ChatWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+
+  AgentCoreRuntimeArn:
+    Description: AgentCore Runtime ARN
+    Value: !GetAtt ChatAgentRuntime.AgentRuntimeArn
+
+  AgentCoreEndpointArn:
+    Description: AgentCore Runtime Endpoint ARN
+    Value: !GetAtt ChatAgentEndpoint.AgentRuntimeEndpointArn
 
