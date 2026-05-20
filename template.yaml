@@ -94,6 +94,15 @@ Resources:
                 Action:
                   - execute-api:ManageConnections
                 Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatWebSocketApi}/*"
+              - Sid: CloudWatchLogsPolicy
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-QueryFunction:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-QueryStreamFunction:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-WsAuthFunction:*"
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 
@@ -514,6 +523,67 @@ Resources:
       AgentRuntimeId: !GetAtt ChatAgentRuntime.AgentRuntimeId
       Name: "tbs_app_chat_Endpoint"
       Description: "Production inference endpoint for TBS Chat"
+
+  # --- Bedrock Evaluations ---
+
+  EvaluationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub ${AWS::StackName}-EvalExecPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:GetLogEvents
+                  - logs:FilterLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:StartQuery
+                  - logs:GetQueryResults
+                  - logs:StopQuery
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*"
+              - Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*"
+
+#  ChatAgentOnlineEvaluation:
+#    Type: AWS::BedrockAgentCore::OnlineEvaluationConfig
+#    DependsOn:
+#      - ChatAgentEndpoint
+#    Properties:
+#      OnlineEvaluationConfigName: tbs_chat_online_eval
+#      Description: "Online evaluation for TBS Chat Agent"
+#      ExecutionStatus: ENABLED
+#      EvaluationExecutionRoleArn: !GetAtt EvaluationExecutionRole.Arn
+#      DataSourceConfig:
+#        CloudWatchLogs:
+#          LogGroupNames:
+#            - "/tbs/bedrock/spans"
+#          ServiceNames:
+#            - "tbs_app_chat_Runtime.tbs_app_chat_Endpoint"
+#      Evaluators:
+#        - EvaluatorId: "Builtin.Helpfulness"
+#      Rule:
+#        SamplingConfig:
+#          SamplingPercentage: 100
 
 Outputs:
   QueryFunctionArn:
