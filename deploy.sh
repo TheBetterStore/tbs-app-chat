@@ -20,10 +20,13 @@ aws ssm put-parameter \
   --no-overwrite
 
 # sam package --template-file ./template.yaml --output-template-file generated-template.yaml --s3-bucket $DEPLOY_BUCKET
-sam build --cached
-#sam build
+echo "==> Building and pushing container..."
+currentTime=$(date +"%Y%m%d%H%M%S")
+shortGitHash=$(git rev-parse --short=7 HEAD)
+export containerImageTag=${shortGitHash}-${currentTime}
+./deploy-container.sh "${containerImageTag}"
 
-sam deploy --template-file .aws-sam/build/template.yaml --stack-name $stackName \
+sam deploy --template-file ./template.yaml --stack-name $stackName \
 --s3-bucket $deployBucket --s3-prefix $appName \
 --capabilities CAPABILITY_NAMED_IAM --region ap-southeast-2 --parameter-overrides Environment=$environment \
 AppLoginCFName=tbs-app-login-$environment \
@@ -32,6 +35,20 @@ KmsCFStackName=$kmsCFStackName \
 AllowedCorsDomains="http://localhost:4200,https://thebetterstore.net" \
 BedrockModel="global.anthropic.claude-sonnet-4-5-20250929-v1:0" \
 BraveApiKeyParam="${braveApiKeyParam}" \
+ContainerImageTag="${containerImageTag}" \
 --no-fail-on-empty-changeset \
---tags Environment=$Environment StackName=$STACK_NAME TagProduct=$APP_NAME \
+--tags Environment=$environment StackName=$stackName TagProduct=$appName \
 --profile thebetterstore
+
+echo "==> Updating endpoint to latest runtime version..."
+latestVersion=$(aws bedrock-agentcore-control get-agent-runtime \
+  --agent-runtime-id tbs_app_chat_Runtime-G3j0S02kcw \
+  --region ap-southeast-2 --profile thebetterstore \
+  --query 'agentRuntimeVersion' --output text)
+aws bedrock-agentcore-control update-agent-runtime-endpoint \
+  --agent-runtime-id tbs_app_chat_Runtime-G3j0S02kcw \
+  --endpoint-name tbs_app_chat_Endpoint \
+  --agent-runtime-version "${latestVersion}" \
+  --region ap-southeast-2 --profile thebetterstore
+echo "==> Endpoint updating to version ${latestVersion}"
+
