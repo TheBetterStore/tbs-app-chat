@@ -591,6 +591,9 @@ Resources:
             - "tbs_app_chat_Runtime.tbs_app_chat_Endpoint"
       Evaluators:
         - EvaluatorId: "Builtin.Helpfulness"
+        - EvaluatorId: "Builtin.Coherence"
+        - EvaluatorId: "Builtin.ResponseRelevance"
+        - EvaluatorId: "Builtin.Harmfulness"
       Rule:
         SamplingConfig:
           SamplingPercentage: 100
