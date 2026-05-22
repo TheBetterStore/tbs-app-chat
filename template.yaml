@@ -142,6 +142,7 @@ Resources:
         SYSTEM_PROMPT: !Ref SystemPrompt
         PRODUCTS_API_BASE_URL: "https://api.thebetterstore.net/product/v1"
         BRAVE_API_KEY_PARAM: !Ref BraveApiKeyParam
+        OTEL_SEMCONV_STABILITY_OPT_IN: "gen_ai_latest_experimental,gen_ai_tool_definitions"
       LifecycleConfiguration:
         IdleRuntimeSessionTimeout: 900
         MaxLifetime: 14400
