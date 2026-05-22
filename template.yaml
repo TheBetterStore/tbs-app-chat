@@ -118,6 +118,17 @@ Resources:
     Properties:
       AgentRuntimeName: "tbs_app_chat_Runtime"
       Description: "TBS Chat Agent - AgentCore Runtime v3"
+      AuthorizerConfiguration:
+        CustomJWTAuthorizer:
+          DiscoveryUrl: !Sub
+            - "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPoolId}/.well-known/openid-configuration"
+            - UserPoolId:
+                Fn::ImportValue: !Sub ${AppLoginCFName}:UserPoolId
+          AllowedClients:
+            - Fn::ImportValue: !Sub ${AppLoginCFName}:UserPoolWebClientId
+      RequestHeaderConfiguration:
+        RequestHeaderAllowlist:
+          - "Authorization"
       AgentRuntimeArtifact:
         ContainerConfiguration:
           ContainerUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/tbs-chat-agent:${ContainerImageTag}"
