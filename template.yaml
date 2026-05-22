@@ -53,6 +53,12 @@ Parameters:
     Default: 'brycepc@hotmail.com'
     Description: Allowed username for WebSocket access
 
+  AgentcoreChatMemoryExpiration:
+    Type: Number
+    Description: In days
+    MaxValue: 365
+    Default: 30
+
 Resources:
 
   # --- AgentCore Runtime (Option B) ---
@@ -112,6 +118,15 @@ Resources:
                   - xray:PutTraceSegments
                   - xray:PutTelemetryRecords
                 Resource: "*"
+              - Sid: MemoryPolicy
+                Effect: Allow
+                Action:
+                  - bedrock-agentcore:CreateEvent
+                  - bedrock-agentcore:GetEvent
+                  - bedrock-agentcore:ListEvents
+                  - bedrock-agentcore:ListSessions
+                  - bedrock-agentcore:RetrieveMemoryRecords
+                Resource: "*"
 
   ChatAgentRuntime:
     Type: AWS::BedrockAgentCore::Runtime
@@ -142,11 +157,21 @@ Resources:
         SYSTEM_PROMPT: !Ref SystemPrompt
         PRODUCTS_API_BASE_URL: "https://api.thebetterstore.net/product/v1"
         BRAVE_API_KEY_PARAM: !Ref BraveApiKeyParam
+        MEMORY_ID: !GetAtt ChatMemory.MemoryId
         OTEL_SEMCONV_STABILITY_OPT_IN: "gen_ai_latest_experimental,gen_ai_tool_definitions"
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://xray.ap-southeast-2.amazonaws.com"
+        OTEL_TRACES_EXPORTER: "otlp"
       LifecycleConfiguration:
         IdleRuntimeSessionTimeout: 900
         MaxLifetime: 14400
       # Note we need to enable tracing for use by evaluations manually via the web console; it is not yet supported in cfn
+
+  ChatMemory:
+    Type: AWS::BedrockAgentCore::Memory
+    Properties:
+      Name: "tbs_chat_memory"
+      Description: "Short-term conversation memory for authenticated users"
+      EventExpiryDuration: !Ref AgentcoreChatMemoryExpiration
 
   ChatAgentEndpoint:
     Type: AWS::BedrockAgentCore::RuntimeEndpoint
