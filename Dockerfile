@@ -1,7 +1,8 @@
 FROM public.ecr.aws/docker/library/node:24-slim AS builder
 WORKDIR /app
 COPY package.json package-lock.json .npmrc ./
-RUN npm install --legacy-peer-deps
+COPY scripts/ ./scripts/
+RUN npm install --legacy-peer-deps && bash scripts/patch-strands-scope.sh
 COPY src/ src/
 COPY tsconfig.json ./
 RUN npx esbuild@0.21.0 src/application/runtime-server/index.ts \

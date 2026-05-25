@@ -7,6 +7,7 @@
   "author": "SAM CLI",
   "license": "MIT",
   "scripts": {
+    "postinstall": "bash scripts/patch-strands-scope.sh",
     "unit": "jest",
     "lint": "eslint '*.ts' --quiet --fix",
     "compile": "tsc",
