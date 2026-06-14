@@ -17,10 +17,6 @@ Parameters:
   KmsCFStackName:
     Type: String
 
-  QueryReservedConcurrency:
-    Type: String
-    Default: 1
-
   QueryLoggingLevel:
     Type: String
     Default: DEBUG
@@ -47,401 +43,23 @@ Parameters:
     Type: String
     Description: SSM Parameter Store param for Brave API key
 
+  ContainerImageTag:
+    Type: String
+    Default: latest
+    Description: Container image tag for AgentCore runtime
+
   AllowedUser:
     Type: String
     Default: 'brycepc@hotmail.com'
     Description: Allowed username for WebSocket access
 
+  AgentcoreChatMemoryExpiration:
+    Type: Number
+    Description: In days
+    MaxValue: 365
+    Default: 30
+
 Resources:
-
-  LambdaExcecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      Path: "/"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: "Allow"
-            Principal:
-              Service:
-                - "lambda.amazonaws.com"
-            Action:
-              - "sts:AssumeRole"
-      Policies:
-        - PolicyName: !Sub ${AWS::StackName}-Policies
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Sid: BedrockPolicy
-                Effect: Allow
-                Action:
-                  - bedrock:InvokeModel
-                  - bedrock:InvokeModelWithResponseStream
-                Resource: "*"
-              - Sid: KmsPolicy
-                Effect: Allow
-                Action:
-                  - kms:Decrypt
-                Resource:
-                  Fn::ImportValue: !Sub ${KmsCFStackName}:InternalKmsKey:Arn
-              - Sid: SsmPolicy
-                Effect: Allow
-                Action:
-                  - ssm:GetParameter
-                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BraveApiKeyParam}"
-              - Sid: WebSocketPostPolicy
-                Effect: Allow
-                Action:
-                  - execute-api:ManageConnections
-                Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatWebSocketApi}/*"
-      ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-
-  QueryFunction:
-    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
-    Properties:
-      CodeUri: ./
-      Handler: index.handler
-      Runtime: nodejs24.x
-      Architectures:
-      - x86_64
-      MemorySize: 1024
-      Timeout: 30
-      AutoPublishAlias: live
-      DeploymentPreference:
-        Type: AllAtOnce
-      ReservedConcurrentExecutions: !Ref QueryReservedConcurrency
-      Role: !GetAtt LambdaExcecutionRole.Arn
-      LoggingConfig:
-        LogGroup: !Ref QueryFunctionLogGroup
-        LogFormat: JSON
-        ApplicationLogLevel: !Ref QueryLoggingLevel
-      Description: Invoke GenAI queries against bedrock model
-      Environment:
-        Variables:
-          BEDROCK_MODEL: !Ref BedrockModel
-          MAX_TOKENS: !Ref MaxTokens
-          SYSTEM_PROMPT: !Ref SystemPrompt
-          ALLOWED_CORS_DOMAINS: !Ref AllowedCorsDomains
-          PRODUCTS_API_BASE_URL: "https://api.thebetterstore.net/product/v1"
-          BRAVE_API_KEY_PARAM: !Ref BraveApiKeyParam
-          NODE_OPTIONS: "--enable-source-maps"
-    Metadata: # Manage esbuild properties
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: true
-        Target: es2020
-        Sourcemap: true
-        EntryPoints:
-        - src/application/command-handlers/query/index.ts
-
-  QueryFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-QueryFunction"
-      RetentionInDays: 30
-
-  QueryStreamFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: ./
-      Handler: index.wsHandler
-      Runtime: nodejs24.x
-      Architectures:
-      - x86_64
-      MemorySize: 1024
-      Timeout: 30
-      ReservedConcurrentExecutions: !Ref QueryReservedConcurrency
-      Role: !GetAtt LambdaExcecutionRole.Arn
-      LoggingConfig:
-        LogGroup: !Ref QueryStreamFunctionLogGroup
-        LogFormat: JSON
-        ApplicationLogLevel: !Ref QueryLoggingLevel
-      Description: Stream GenAI responses via WebSocket
-      Environment:
-        Variables:
-          BEDROCK_MODEL: !Ref BedrockModel
-          MAX_TOKENS: !Ref MaxTokens
-          SYSTEM_PROMPT: !Ref SystemPrompt
-          ALLOWED_CORS_DOMAINS: !Ref AllowedCorsDomains
-          PRODUCTS_API_BASE_URL: "https://api.thebetterstore.net/product/v1"
-          BRAVE_API_KEY_PARAM: !Ref BraveApiKeyParam
-          NODE_OPTIONS: "--enable-source-maps"
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: true
-        Target: es2020
-        Sourcemap: true
-        EntryPoints:
-        - src/application/command-handlers/query/index.ts
-
-  QueryStreamFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-QueryStreamFunction"
-      RetentionInDays: 30
-
-  WsAuthFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: ./
-      Handler: index.handler
-      Runtime: nodejs24.x
-      Architectures:
-      - x86_64
-      MemorySize: 1024
-      Timeout: 30
-      ReservedConcurrentExecutions: !Ref QueryReservedConcurrency
-      Role: !GetAtt LambdaExcecutionRole.Arn
-      LoggingConfig:
-        LogGroup: !Ref WsAuthFunctionLogGroup
-        LogFormat: JSON
-        ApplicationLogLevel: !Ref QueryLoggingLevel
-      Description: WebSocket $connect authorizer
-      Environment:
-        Variables:
-          USER_POOL_ID:
-            Fn::ImportValue: !Sub ${AppLoginCFName}:UserPoolId
-          USER_POOL_CLIENT_ID:
-            Fn::ImportValue: !Sub ${AppLoginCFName}:UserPoolWebClientId
-          ALLOWED_CORS_DOMAINS: !Ref AllowedCorsDomains
-          ALLOWED_USER: !Ref AllowedUser
-          NODE_OPTIONS: "--enable-source-maps"
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: true
-        Target: es2020
-        Sourcemap: true
-        EntryPoints:
-        - src/application/command-handlers/ws-authorizer/index.ts
-
-  WsAuthFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-WsAuthFunction"
-      RetentionInDays: 30
-
-  WsAuthLambdaPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !Ref WsAuthFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatWebSocketApi}/*"
-
-  ChatWebSocketApi:
-    Type: AWS::ApiGatewayV2::Api
-    Properties:
-      Name: !Sub "${AWS::StackName}-ws"
-      ProtocolType: WEBSOCKET
-      RouteSelectionExpression: "$request.body.action"
-
-  WebSocketAuthorizer:
-    Type: AWS::ApiGatewayV2::Authorizer
-    Properties:
-      ApiId: !Ref ChatWebSocketApi
-      AuthorizerType: REQUEST
-      AuthorizerUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsAuthFunction.Arn}/invocations"
-      Name: CognitoWsAuthorizer
-      IdentitySource:
-        - "route.request.querystring.token"
-
-  ConnectRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref ChatWebSocketApi
-      RouteKey: "$connect"
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref WebSocketAuthorizer
-      Target: !Sub "integrations/${WebSocketIntegration}"
-
-  DisconnectRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref ChatWebSocketApi
-      RouteKey: "$disconnect"
-      Target: !Sub "integrations/${WebSocketIntegration}"
-
-  SendMessageRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref ChatWebSocketApi
-      RouteKey: "sendMessage"
-      Target: !Sub "integrations/${WebSocketIntegration}"
-
-  WebSocketIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref ChatWebSocketApi
-      IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${QueryStreamFunction.Arn}/invocations"
-
-  WebSocketStage:
-    Type: AWS::ApiGatewayV2::Stage
-    Properties:
-      ApiId: !Ref ChatWebSocketApi
-      StageName: Prod
-      AutoDeploy: true
-      DefaultRouteSettings:
-        ThrottlingRateLimit: 10
-        ThrottlingBurstLimit: 10
-
-  WebSocketLambdaPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !Ref QueryStreamFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatWebSocketApi}/*"
-
-  ApiGwAccessLogs:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Join ["", ["API-Gateway-Access-Logs_", !Sub "${AWS::StackName}"]]
-      RetentionInDays: 365
-
-  QueryFunctionApiGatewayInvoke:
-    Type: "AWS::Lambda::Permission"
-    Properties:
-      Action: "lambda:InvokeFunction"
-      FunctionName: !Ref "QueryFunction.Alias"
-      Principal: "apigateway.amazonaws.com"
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ChatApi}/*"
-
-  ChatApi:
-    Type: AWS::Serverless::Api
-    Properties:
-      StageName: Prod
-      EndpointConfiguration: REGIONAL
-      MinimumCompressionSize: 0
-      TracingEnabled: true
-      AccessLogSetting:
-        DestinationArn: !GetAtt ApiGwAccessLogs.Arn
-        Format: >
-          {"requestTimeEpoch": $context.requestTimeEpoch, "requestId":"$context.requestId",
-          "httpMethod": "$context.httpMethod", "path":"$context.path", "resourcePath": "$context.resourcePath",
-          "status": "$context.status",
-          "lambdaRequestId": "$context.integration.requestId", "integrationStatus": "$context.integration.status",
-          "xrayTraceId": "$context.xrayTraceId", "responseLatency": $context.responseLatency,
-          "integrationLatency": "$context.integrationLatency", "error": "$context.error.message",
-          "userAgent": "$context.identity.userAgent", "sourceIp": "$context.identity.sourceIp"}
-      MethodSettings:
-        - HttpMethod: "*"
-          ResourcePath: "/*"
-          DataTraceEnabled: false
-          MetricsEnabled: true # Enable detailed metrics (error 404, latence, ...)
-          ThrottlingRateLimit: 10
-          ThrottlingBurstLimit: 10
-          LoggingLevel: ERROR
-      OpenApiVersion: 3.0.1
-      DefinitionBody:
-        openapi: "3.0.1"
-        info:
-          title: !Sub "${AWS::StackName}-api"
-          version: "2021-06-10T02:04:23Z"
-        paths:
-          /query:
-            post:
-              responses:
-                "200":
-                  description: "Event post successfully handled and placed on queue"
-                  headers:
-                    Strict-Transport-Security:
-                      schema:
-                        type: "string"
-                    Access-Control-Allow-Origin:
-                      schema:
-                        type: "string"
-                "400":
-                  description: Bad request
-                "500":
-                  description: Server Error
-              security:
-                - TbsUser: [ ]
-              x-amazon-apigateway-integration:
-                httpMethod: "POST"
-                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${QueryFunction.Arn}:live/invocations"
-                responses:
-                  default:
-                    statusCode: "200"
-                    responseParameters:
-                      method.response.header.Strict-Transport-Security: "'max-age=31536000; includeSubdomains; preload'"
-                      method.response.header.Access-Control-Allow-Origin: "'*'"
-                passthroughBehavior: "when_no_match"
-                type: "aws_proxy"
-
-            options:
-              consumes:
-                - "application/json"
-              produces:
-                - "application/json"
-              responses:
-                "200":
-                  description: "200 response"
-                  headers:
-                    Access-Control-Allow-Origin:
-                      type: "string"
-                    Access-Control-Allow-Methods:
-                      type: "string"
-                    Access-Control-Allow-Headers:
-                      type: "string"
-                    Strict-Transport-Security:
-                      type: "string"
-                    X-Frame-Options:
-                      type: "string"
-                    Content-Security-Policy:
-                      type: "string"
-              x-amazon-apigateway-integration:
-                responses:
-                  default:
-                    statusCode: "200"
-                    responseParameters:
-                      method.response.header.Access-Control-Allow-Methods: "'GET,POST,PATCH,PUT,DELETE,OPTIONS'"
-                      method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-                      method.response.header.Access-Control-Allow-Origin: "'*'"
-                      method.response.header.Strict-Transport-Security: "'max-age=31536000; includeSubdomains; preload'"
-                      method.response.header.X-Frame-Options: "'DENY'"
-                      method.response.header.Content-Security-Policy: "'default-src \"none\"; frame-ancestors \"none\"'"
-                requestTemplates:
-                  application/json: "{\"statusCode\": 200}"
-                passthroughBehavior: "when_no_match"
-                type: "mock"
-
-        securityDefinitions:
-          TbsUser:
-            type: "apiKey"
-            name: "Authorization"
-            in: "header"
-            x-amazon-apigateway-authtype: "cognito_user_pools"
-            x-amazon-apigateway-authorizer:
-              providerARNs:
-                - Fn::ImportValue: !Sub ${AppLoginCFName}:UserPoolArn
-              type: "cognito_user_pools"
-        x-amazon-apigateway-gateway-responses:
-          DEFAULT_5XX:
-            responseParameters:
-              gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS,POST'"
-              gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
-              gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-          DEFAULT_4XX:
-            responseParameters:
-              gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS,POST'"
-              gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
-              gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-        x-amazon-apigateway-minimum-compression-size: 0
-
-  ApiBasePathMapping:
-    Type: AWS::ApiGatewayV2::ApiMapping
-    DependsOn:
-      - ChatApi
-    Properties:
-      DomainName:
-        Fn::ImportValue: !Sub ${InfraBaseCFName}:ApiGwCustomDomain:Name
-      ApiId: !Ref ChatApi
-      Stage: !Ref ChatApi.Stage
-      ApiMappingKey: "chat/v1"
 
   # --- AgentCore Runtime (Option B) ---
 
@@ -471,7 +89,7 @@ Resources:
                 Effect: Allow
                 Action:
                   - ssm:GetParameter
-                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BraveApiKeyParam}"
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*"
               - Sid: KmsPolicy
                 Effect: Allow
                 Action:
@@ -485,15 +103,53 @@ Resources:
                   - ecr:BatchGetImage
                   - ecr:GetAuthorizationToken
                 Resource: "*"
+              - Sid: LogsPolicy
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*"
+              - Sid: XRayPolicy
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                  - xray:GetSamplingStatisticSummaries
+                Resource: "*"
+              - Sid: MemoryPolicy
+                Effect: Allow
+                Action:
+                  - bedrock-agentcore:CreateEvent
+                  - bedrock-agentcore:GetEvent
+                  - bedrock-agentcore:ListEvents
+                  - bedrock-agentcore:ListSessions
+                  - bedrock-agentcore:RetrieveMemoryRecords
+                Resource: "*"
 
   ChatAgentRuntime:
     Type: AWS::BedrockAgentCore::Runtime
     Properties:
       AgentRuntimeName: "tbs_app_chat_Runtime"
-      Description: "TBS Chat Agent - AgentCore Runtime"
+      Description: "TBS Chat Agent - AgentCore Runtime v3"
+      AuthorizerConfiguration:
+        CustomJWTAuthorizer:
+          DiscoveryUrl: !Sub
+            - "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPoolId}/.well-known/openid-configuration"
+            - UserPoolId:
+                Fn::ImportValue: !Sub ${AppLoginCFName}:UserPoolId
+          AllowedClients:
+            - Fn::ImportValue: !Sub ${AppLoginCFName}:UserPoolWebClientId
+      RequestHeaderConfiguration:
+        RequestHeaderAllowlist:
+          - "Authorization"
       AgentRuntimeArtifact:
         ContainerConfiguration:
-          ContainerUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/tbs-chat-agent:latest"
+          ContainerUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/tbs-chat-agent:${ContainerImageTag}"
       NetworkConfiguration:
         NetworkMode: PUBLIC
       RoleArn: !GetAtt AgentCoreRuntimeRole.Arn
@@ -504,9 +160,22 @@ Resources:
         SYSTEM_PROMPT: !Ref SystemPrompt
         PRODUCTS_API_BASE_URL: "https://api.thebetterstore.net/product/v1"
         BRAVE_API_KEY_PARAM: !Ref BraveApiKeyParam
+        MEMORY_ID: !GetAtt ChatMemory.MemoryId
+        OTEL_SEMCONV_STABILITY_OPT_IN: "gen_ai_tool_definitions"
+        OTEL_TRACES_EXPORTER: "otlp"
+        OTEL_SERVICE_NAME: "tbs_app_chat_Runtime.tbs_app_chat_Endpoint"
+        AGENT_OBSERVABILITY_ENABLED: "true"
       LifecycleConfiguration:
         IdleRuntimeSessionTimeout: 900
         MaxLifetime: 14400
+      # Note we need to enable tracing for use by evaluations manually via the web console; it is not yet supported in cfn
+
+  ChatMemory:
+    Type: AWS::BedrockAgentCore::Memory
+    Properties:
+      Name: "tbs_chat_memory"
+      Description: "Short-term conversation memory for authenticated users"
+      EventExpiryDuration: !Ref AgentcoreChatMemoryExpiration
 
   ChatAgentEndpoint:
     Type: AWS::BedrockAgentCore::RuntimeEndpoint
@@ -515,14 +184,90 @@ Resources:
       Name: "tbs_app_chat_Endpoint"
       Description: "Production inference endpoint for TBS Chat"
 
-Outputs:
-  QueryFunctionArn:
-    Description: Query Lambda Function ARN
-    Value: !GetAtt QueryFunction.Arn
+  # --- Bedrock Evaluations ---
 
-  QueryStreamWebSocketUrl:
-    Description: WebSocket URL for streaming queries
-    Value: !Sub "wss://${ChatWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+  EvaluationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TrustPolicyStatement
+            Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+                aws:ResourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn:
+                  - !Sub "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:evaluator/*"
+                  - !Sub "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:online-evaluation-config/*"
+      Policies:
+        - PolicyName: !Sub ${AWS::StackName}-EvalExecPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CloudWatchLogReadStatement
+                Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                  - logs:GetQueryResults
+                  - logs:StartQuery
+                Resource: "*"
+              - Sid: CloudWatchLogWriteStatement
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/evaluations/*"
+              - Sid: CloudWatchIndexPolicyStatement
+                Effect: Allow
+                Action:
+                  - logs:DescribeIndexPolicies
+                  - logs:PutIndexPolicy
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:aws/spans"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:aws/spans:*"
+              - Sid: BedrockInvokeStatement
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/*"
+                  - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*"
+
+  ChatAgentOnlineEvaluation:
+    Type: AWS::BedrockAgentCore::OnlineEvaluationConfig
+    DependsOn:
+      - ChatAgentEndpoint
+    Properties:
+      OnlineEvaluationConfigName: tbs_chat_online_eval
+      Description: "Online evaluation for TBS Chat Agent"
+      ExecutionStatus: ENABLED
+      EvaluationExecutionRoleArn: !GetAtt EvaluationExecutionRole.Arn
+      DataSourceConfig:
+        CloudWatchLogs:
+          LogGroupNames:
+            - "aws/spans"
+            - !Sub "/aws/bedrock-agentcore/runtimes/${ChatAgentRuntime.AgentRuntimeId}-tbs_app_chat_Endpoint"
+          ServiceNames:
+            - "tbs_app_chat_Runtime.tbs_app_chat_Endpoint"
+      Evaluators:
+        - EvaluatorId: "Builtin.Helpfulness"
+        - EvaluatorId: "Builtin.Coherence"
+        - EvaluatorId: "Builtin.ResponseRelevance"
+        - EvaluatorId: "Builtin.Harmfulness"
+      Rule:
+        SamplingConfig:
+          SamplingPercentage: 100
+
+
+Outputs:
 
   AgentCoreRuntimeArn:
     Description: AgentCore Runtime ARN

@@ -11,6 +11,10 @@ echo "==> Creating ECR repository (if not exists)..."
 aws ecr describe-repositories --repository-names "${REPO_NAME}" --region "${REGION}" 2>/dev/null || \
   aws ecr create-repository --repository-name "${REPO_NAME}" --region "${REGION}" --image-scanning-configuration scanOnPush=true
 
+echo "==> Setting lifecycle policy (keep last 10 images)..."
+aws ecr put-lifecycle-policy --repository-name "${REPO_NAME}" --region "${REGION}" \
+  --lifecycle-policy-text '{"rules":[{"rulePriority":1,"description":"Keep last 10 images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},"action":{"type":"expire"}}]}'
+
 echo "==> Logging in to ECR..."
 aws ecr get-login-password --region "${REGION}" | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 
