@@ -2,25 +2,22 @@ import 'reflect-metadata';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 import { ChatService } from '../../domain/services/chat-service';
-import { InventoryService } from '../../domain/services/inventory-service';
+import container, { initContainer } from './container';
+import { IChatService } from '../../domain/interfaces/chat-service.interface';
+import TYPES from '../../infrastructure/types';
 
 const PORT = 8080;
 
-let chatService: ChatService;
+let chatService: IChatService;
+const containerReady = initContainer();
 
 async function init() {
+  await containerReady;
   const ssm = new SSMClient();
   const resp = await ssm.send(
     new GetParameterCommand({ Name: process.env.BRAVE_API_KEY_PARAM!, WithDecryption: true }),
   );
-  const inventoryService = new InventoryService();
-  chatService = new ChatService(
-    inventoryService,
-    process.env.BEDROCK_MODEL || '',
-    process.env.MAX_TOKENS || '1024',
-    process.env.SYSTEM_PROMPT || '',
-    resp.Parameter?.Value || '',
-  );
+  chatService = container.get<IChatService>(TYPES.IChatService);
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
