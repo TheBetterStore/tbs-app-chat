@@ -37,8 +37,6 @@ env:
   isNoExecuteChangeset: ${{ inputs.reviewChangeset }}
 
   ECR_REGISTRY: "${{ vars.AWS_ACCOUNT }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com"
-  ECR_REPOSITORY_NAME: ${{ inputs.environment }}/${{ env.applicationName }}
-  ECR_REPOSITORY_URL: ${{ env.ECR_REGISTRY }}/${{ inputs.environment }}/${{ env.application_name }}
 
 jobs:
   build:
@@ -50,6 +48,9 @@ jobs:
       AWS_MAX_ATTEMPTS: '50'
       AWS_RETRY_MODE: 'standard' # [standard, adaptive]
       AWS_PAGER: ""
+
+      ECR_REPOSITORY_NAME: ${{ inputs.environment }}/${{ env.applicationName }}
+      ECR_REPOSITORY_URL: ${{ env.ECR_REGISTRY }}/${{ inputs.environment }}/${{ env.applicationName }}
 
     steps:
       # code checkout
@@ -110,6 +111,9 @@ jobs:
       always() && github.actor == 'brycepc' &&
       (needs.build.result == 'success' || needs.build.result == 'skipped')
     environment: ${{ inputs.environment }}
+    env:
+      ECR_REPOSITORY_NAME: ${{ inputs.environment }}/${{ env.applicationName }}
+      ECR_REPOSITORY_URL: ${{ env.ECR_REGISTRY }}/${{ inputs.environment }}/${{ env.applicationName }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
