@@ -16,10 +16,12 @@
     "@aws-sdk/client-apigatewaymanagementapi": "^3.1009.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1009.0",
     "@aws-sdk/client-ssm": "^3.1041.0",
+    "@strands-agents/sdk": "^1.2.0",
     "aws-jwt-verify": "^4.0.1",
     "esbuild": "^0.14.14",
     "inversify": "^8.0.0",
-    "reflect-metadata": "^0.2.2"
+    "reflect-metadata": "^0.2.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@jest/globals": "^29.2.0",

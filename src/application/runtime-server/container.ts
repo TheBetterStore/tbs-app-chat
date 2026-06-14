@@ -1,9 +1,9 @@
 import {Container} from 'inversify';
-import TYPES from '../../../infrastructure/types';
-import { IInventoryService } from '../../../domain/interfaces/inventory-service.interface';
-import {InventoryService} from '../../../domain/services/inventory-service';
-import {ChatService} from '../../../domain/services/chat-service';
-import {IChatService} from '../../../domain/interfaces/chat-service.interface';
+import TYPES from '../../infrastructure/types';
+import { IInventoryService } from '../../domain/interfaces/inventory-service.interface';
+import {InventoryService} from '../../domain/services/inventory-service';
+import {ChatService} from '../../domain/services/chat-service';
+import {IChatService} from '../../domain/interfaces/chat-service.interface';
 import {SSMClient, GetParameterCommand} from '@aws-sdk/client-ssm';
 
 const container = new Container();

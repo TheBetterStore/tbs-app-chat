@@ -19,11 +19,8 @@ aws ssm put-parameter \
   --key-id "${internalKmsKeyId}" \
   --no-overwrite
 
-# sam package --template-file ./template.yaml --output-template-file generated-template.yaml --s3-bucket $DEPLOY_BUCKET
-sam build --cached
-#sam build
 
-sam deploy --template-file .aws-sam/build/template.yaml --stack-name $stackName \
+aws cloudformation deploy --template-file ./template.yaml --stack-name $stackName \
 --s3-bucket $deployBucket --s3-prefix $appName \
 --capabilities CAPABILITY_NAMED_IAM --region ap-southeast-2 --parameter-overrides Environment=$environment \
 AppLoginCFName=tbs-app-login-$environment \
