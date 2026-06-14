@@ -17,6 +17,9 @@ Parameters:
   KmsCFStackName:
     Type: String
 
+  EcrImageUrl:
+    Type: String
+
   QueryLoggingLevel:
     Type: String
     Default: DEBUG
@@ -42,11 +45,6 @@ Parameters:
   BraveApiKeyParam:
     Type: String
     Description: SSM Parameter Store param for Brave API key
-
-  ContainerImageTag:
-    Type: String
-    Default: latest
-    Description: Container image tag for AgentCore runtime
 
   AllowedUser:
     Type: String
@@ -149,7 +147,7 @@ Resources:
           - "Authorization"
       AgentRuntimeArtifact:
         ContainerConfiguration:
-          ContainerUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/tbs-chat-agent:${ContainerImageTag}"
+          ContainerUri: !Ref EcrImageUrl
       NetworkConfiguration:
         NetworkMode: PUBLIC
       RoleArn: !GetAtt AgentCoreRuntimeRole.Arn

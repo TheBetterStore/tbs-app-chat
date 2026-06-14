@@ -1,0 +1,141 @@
+name: buildanddeploy-agent
+run-name: buildanddeploy-agent - ${{ inputs.environment }}- ${{ github.ref_name }}-${{ github.sha }} - image ${{ inputs.existingBuildImage }} - review ${{ inputs.reviewChangeset }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+      existingBuildImage:
+        description: Existing Build Image
+        required: false
+        type: string
+
+      reviewChangeset:
+        description: Review Changeset
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+  packages: read
+
+env:
+  application_name: tbs_chat
+  stackName: tbs-app-chat-${{ inputs.environment }}
+  environent: ${{ inputs.environment }}
+  region: ${{ vars.AWS_REGION }}
+  deployBucket: ${{ vars.DEPLOY_BUCKET }}
+  isNoExecuteChangeset: ${{ inputs.reviewChangeset }}
+
+  ECR_REGISTRY: "${{ vars.AWS_ACCOUNT }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com"
+  ECR_REPOSITORY_NAME: ${{ inputs.environment }}/${{ env.applicationName }}
+  ECR_REPOSITORY_URL: ${{ env.ECR_REGISTRY }}/${{ inputs.environment }}/${{ env.application_name }}
+
+jobs:
+  build:
+    if: github.actor == 'brycepc' && inputs.existingBuildImage == ''
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    env:
+      working-directory: ./
+      AWS_MAX_ATTEMPTS: '50'
+      AWS_RETRY_MODE: 'standard' # [standard, adaptive]
+      AWS_PAGER: ""
+
+    steps:
+      # code checkout
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume:  ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.region }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Get Short Git Hash
+        id: vars
+        run: |
+          currentTime=$(date +"%Y%m%d%H%M%S")
+          shortGitHash=$(git rev-parse --short HEAD)
+          echo "image_tag=${shortGitHash}-${currentTime}" >> $GITHUB_OUTPUT
+
+      # The following is needed because AgentCore Runtime requires ARM64 containers, and the GitHub Actions runner (CodeBuild) is an x86_64 machine
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build, tag and push image to ECR
+        env:
+          IMAGE_TAG: ${{ steps.vars.outputs.image_tag }}
+        run: |
+          echo "Tag is ${{env.IMAGE_TAG}}"
+
+          echo "Creating ECR repo (ignoring already-exists error)"
+          aws ecr create-repository \
+            --repository-name ${{ env.ECR_REPOSITORY_NAME }} \
+            --image-scanning-configuration scanOnPush=true \
+            --region ${{ env.region }} || true
+
+          echo "Deploying to ECR Repository: ${ECR_REPOSITORY_NAME}"
+
+          echo "Building arm64 image (required by AgentCore Runtime)"
+          docker buildx build \
+            --platform linux/arm64 \
+            -f Dockerfile-agentcore \
+            -t ${{ env.ECR_REPOSITORY_URL }}:${{ env.IMAGE_TAG }} \
+            -t ${{ env.ECR_REPOSITORY_URL }}:latest \
+            --push \
+            .
+
+    outputs:
+      imageTag: ${{ steps.vars.outputs.imageTag }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: |
+      always() && github.actor == 'brycepc' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@thebetterstore'
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Get image tag
+        id: vars
+        run: |
+          if [[ "${{ inputs.existing_build_image }}" != "" ]]
+          then
+            echo "imageTag=${{ inputs.existing_build_image }}" >> $GITHUB_OUTPUT
+          else
+            echo "imageTag=${{ needs.build.outputs.imageTag }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Deploy CloudFormation stack
+        env:
+          IMAGE_TAG: ${{ steps.vars.outputs.imageTag }}
+        run: |
+          chmod +x ${{ github.workspace }}/deploy.sh # accommodating Windows/wsl dev envts
+          ${{ github.workspace }}/bin/deploy.sh
+

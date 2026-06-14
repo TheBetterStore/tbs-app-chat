@@ -1,6 +1,3 @@
-export environment=prod
-export deployBucket=$MY_DEPLOY_BUCKET
-
 export appName=tbs-app-chat
 export kmsCFStackName="tbs-sec-kms-${environment}"
 export stackName=$appName-$environment
@@ -26,7 +23,7 @@ shortGitHash=$(git rev-parse --short=7 HEAD)
 export containerImageTag=${shortGitHash}-${currentTime}
 ./deploy-container.sh "${containerImageTag}"
 
-sam deploy --template-file ./template.yaml --stack-name $stackName \
+aws cloudformation deploy --template-file ./template.yaml --stack-name $stackName \
 --s3-bucket $deployBucket --s3-prefix $appName \
 --capabilities CAPABILITY_NAMED_IAM --region ap-southeast-2 --parameter-overrides Environment=$environment \
 AppLoginCFName=tbs-app-login-$environment \
@@ -40,15 +37,4 @@ ContainerImageTag="${containerImageTag}" \
 --tags Environment=$environment StackName=$stackName TagProduct=$appName \
 --profile thebetterstore
 
-echo "==> Updating endpoint to latest runtime version..."
-latestVersion=$(aws bedrock-agentcore-control get-agent-runtime \
-  --agent-runtime-id tbs_app_chat_Runtime-G3j0S02kcw \
-  --region ap-southeast-2 --profile thebetterstore \
-  --query 'agentRuntimeVersion' --output text)
-aws bedrock-agentcore-control update-agent-runtime-endpoint \
-  --agent-runtime-id tbs_app_chat_Runtime-G3j0S02kcw \
-  --endpoint-name tbs_app_chat_Endpoint \
-  --agent-runtime-version "${latestVersion}" \
-  --region ap-southeast-2 --profile thebetterstore
-echo "==> Endpoint updating to version ${latestVersion}"
 
