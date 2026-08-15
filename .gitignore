@@ -179,6 +179,16 @@ Temporary Items
 
 **/.aws-sam
 
+### Python ###
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+venv/
+
 ### Windows ###
 # Windows thumbnail cache files
 Thumbs.db
