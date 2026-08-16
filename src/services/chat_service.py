@@ -1,13 +1,12 @@
-"""Chat service - implements the agentic loop using Bedrock Converse API."""
+"""Chat service - implements the agentic loop using Strands Agents SDK."""
 
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urlencode, quote_plus
+from urllib.parse import quote_plus
 from urllib.request import urlopen, Request
-from urllib.error import URLError
 
-import boto3
+from strands import Agent, tool
+from strands.models import BedrockModel
 
 from services.inventory_service import lookup_inventory
 
@@ -15,191 +14,51 @@ logger = logging.getLogger(__name__)
 
 TOOL_TIMEOUT_S = 5
 
-TOOLS = [
-    {
-        "toolSpec": {
-            "name": "lookup_inventory",
-            "description": (
-                "Search The Better Store product catalog. Returns products with "
-                "name, category, price, description, and details."
-            ),
-            "inputSchema": {
-                "json": {
-                    "type": "object",
-                    "properties": {
-                        "productName": {
-                            "type": "string",
-                            "description": "Optional product name to filter by",
-                        },
-                        "brandId": {
-                            "type": "string",
-                            "description": (
-                                "Optional brand name to filter by (e.g. ASUS, Dell, Apple, "
-                                "Lenovo, HP, Samsung, Microsoft, Acer, Razer, MSI, "
-                                "Penguin Books, HarperCollins, Bloomsbury)"
-                            ),
-                        },
-                        "category": {
-                            "type": "string",
-                            "description": "Optional product category to filter by",
-                            "enum": ["BOOKS", "COMPUTERS", "MOBILE"],
-                        },
-                    },
-                }
-            },
-        }
-    },
-    {
-        "toolSpec": {
-            "name": "get_computer_reviews",
-            "description": (
-                "Search for reviews and opinions about a specific computer or laptop. "
-                "Use when the user asks about reviews for a computer product."
-            ),
-            "inputSchema": {
-                "json": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Computer or laptop name/model to search reviews for",
-                        }
-                    },
-                    "required": ["query"],
-                }
-            },
-        }
-    },
-    {
-        "toolSpec": {
-            "name": "get_book_info",
-            "description": (
-                "Search for book information including ratings and reviews from Open Library. "
-                "Use when the user asks about a book."
-            ),
-            "inputSchema": {
-                "json": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Book title or author to search for",
-                        }
-                    },
-                    "required": ["query"],
-                }
-            },
-        }
-    },
-]
+
+# --- Tool definitions ---
+
+@tool
+def lookup_inventory_tool(
+    product_name: str = "",
+    brand_id: str = "",
+    category: str = "",
+) -> dict:
+    """Search The Better Store product catalog. Returns products with name, category, price, description, and details.
+
+    Args:
+        product_name: Optional product name to filter by
+        brand_id: Optional brand name to filter by (e.g. ASUS, Dell, Apple, Lenovo, HP, Samsung, Microsoft, Acer, Razer, MSI, Penguin Books, HarperCollins, Bloomsbury)
+        category: Optional product category to filter by (BOOKS, COMPUTERS, or MOBILE)
+    """
+    products = lookup_inventory(
+        product_name=product_name or None,
+        brand_id=brand_id or None,
+        category=category or None,
+    )
+    return {"products": products}
 
 
-class ChatService:
-    """Implements agentic loop with Bedrock Converse API and tool execution."""
+def _create_get_computer_reviews(brave_api_key: str):
+    """Factory to create the get_computer_reviews tool with the API key bound."""
 
-    def __init__(
-            self,
-            bedrock_model: str,
-            max_tokens: str,
-            system_prompt: str,
-            brave_api_key: str,
-    ):
-        self._bedrock_model = bedrock_model
-        self._max_tokens = int(max_tokens) if max_tokens else 1024
-        self._system_prompt = system_prompt
-        self._brave_api_key = brave_api_key
-        self._client = boto3.client("bedrock-runtime", region_name="ap-southeast-2")
+    @tool
+    def get_computer_reviews(query: str) -> dict:
+        """Search for reviews and opinions about a specific computer or laptop. Use when the user asks about reviews for a computer product.
 
-    @property
-    def _converse_params(self) -> dict:
-        return {
-            "modelId": self._bedrock_model,
-            "system": [{"text": self._system_prompt}],
-            "toolConfig": {"tools": TOOLS},
-        }
-
-    def query(self, messages: list[dict]) -> dict:
-        """Synchronous agentic loop - call Bedrock Converse, handle tool use."""
-        logger.info("querying against model: %s", self._bedrock_model)
-
-        def converse():
-            return self._client.converse(
-                **self._converse_params,
-                messages=messages,
-            )
-
-        response = converse()
-        iterations = 0
-
-        while response.get("stopReason") == "tool_use" and iterations < 5:
-            iterations += 1
-            assistant_msg = response["output"]["message"]
-            messages.append(assistant_msg)
-            logger.debug("assistant msg: %s", json.dumps(assistant_msg))
-
-            tool_results = self._execute_tool_calls(assistant_msg.get("content", []))
-            messages.append({"role": "user", "content": tool_results})
-            response = converse()
-
-        logger.info("response: %s", json.dumps(response, default=str))
-        return response
-
-    def _execute_tool_calls(self, content_blocks: list[dict]) -> list[dict]:
-        """Execute tool calls in parallel and return tool results."""
-        tool_blocks = [b for b in content_blocks if "toolUse" in b]
-
-        def execute_single(block: dict) -> dict:
-            tool_use = block["toolUse"]
-            tool_input = tool_use.get("input", {})
-            name = tool_use["name"]
-
-            if name == "get_book_info":
-                result = self._get_book_info(tool_input["query"])
-            elif name == "get_computer_reviews":
-                result = self._get_computer_reviews(tool_input["query"])
-            else:
-                result = {
-                    "products": lookup_inventory(
-                        product_name=tool_input.get("productName"),
-                        brand_id=tool_input.get("brandId"),
-                        category=tool_input.get("category"),
-                    )
-                }
-
-            return {
-                "toolResult": {
-                    "toolUseId": tool_use["toolUseId"],
-                    "content": [{"json": result}],
-                }
-            }
-
-        # Execute in parallel using threads
-        results = []
-        with ThreadPoolExecutor(max_workers=len(tool_blocks)) as executor:
-            futures = {executor.submit(execute_single, b): i for i, b in enumerate(tool_blocks)}
-            # Collect in original order
-            ordered = [None] * len(tool_blocks)
-            for future in as_completed(futures):
-                idx = futures[future]
-                ordered[idx] = future.result()
-            results = ordered
-
-        return results
-
-    def _get_computer_reviews(self, query: str) -> dict:
-        """Search for computer reviews via Brave Search API."""
+        Args:
+            query: Computer or laptop name/model to search reviews for
+        """
         try:
             search_query = quote_plus(query + " review")
             url = f"https://api.search.brave.com/res/v1/web/search?q={search_query}&count=5"
             req = Request(url, headers={
                 "Accept": "application/json",
                 "Accept-Encoding": "gzip",
-                "X-Subscription-Token": self._brave_api_key,
+                "X-Subscription-Token": brave_api_key,
             })
             with urlopen(req, timeout=TOOL_TIMEOUT_S) as resp:
                 if resp.status != 200:
-                    return {
-                        "error": f"Review service unavailable (HTTP {resp.status}). Unable to fetch reviews at this time."}
+                    return {"error": f"Review service unavailable (HTTP {resp.status}). Unable to fetch reviews at this time."}
                 data = json.loads(resp.read().decode())
             return {
                 "results": [
@@ -212,33 +71,118 @@ class ChatService:
                 ]
             }
         except Exception as err:
-            logger.error("getComputerReviews failed: %s", err)
+            logger.error("get_computer_reviews failed: %s", err)
             return {"error": "Review search timed out or failed. Please try again."}
 
-    def _get_book_info(self, query: str) -> dict:
-        """Search for book info via Open Library API."""
-        try:
-            search_query = quote_plus(query)
-            url = (
-                f"https://openlibrary.org/search.json?q={search_query}"
-                "&limit=3&fields=title,author_name,first_publish_year,ratings_average,ratings_count,subject"
-            )
-            req = Request(url)
-            with urlopen(req, timeout=TOOL_TIMEOUT_S) as resp:
-                data = json.loads(resp.read().decode())
-            return {
-                "results": [
-                    {
-                        "title": doc.get("title"),
-                        "authors": doc.get("author_name"),
-                        "year": doc.get("first_publish_year"),
-                        "avgRating": doc.get("ratings_average"),
-                        "ratingsCount": doc.get("ratings_count"),
-                        "subjects": (doc.get("subject") or [])[:5],
-                    }
-                    for doc in data.get("docs", [])
-                ]
-            }
-        except Exception as err:
-            logger.error("getBookInfo failed: %s", err)
-            return {"error": "Book search timed out or failed. Please try again."}
+    return get_computer_reviews
+
+
+@tool
+def get_book_info(query: str) -> dict:
+    """Search for book information including ratings and reviews from Open Library. Use when the user asks about a book.
+
+    Args:
+        query: Book title or author to search for
+    """
+    try:
+        search_query = quote_plus(query)
+        url = (
+            f"https://openlibrary.org/search.json?q={search_query}"
+            "&limit=3&fields=title,author_name,first_publish_year,ratings_average,ratings_count,subject"
+        )
+        req = Request(url)
+        with urlopen(req, timeout=TOOL_TIMEOUT_S) as resp:
+            data = json.loads(resp.read().decode())
+        return {
+            "results": [
+                {
+                    "title": doc.get("title"),
+                    "authors": doc.get("author_name"),
+                    "year": doc.get("first_publish_year"),
+                    "avgRating": doc.get("ratings_average"),
+                    "ratingsCount": doc.get("ratings_count"),
+                    "subjects": (doc.get("subject") or [])[:5],
+                }
+                for doc in data.get("docs", [])
+            ]
+        }
+    except Exception as err:
+        logger.error("get_book_info failed: %s", err)
+        return {"error": "Book search timed out or failed. Please try again."}
+
+
+# --- Chat Service ---
+
+class ChatService:
+    """Uses Strands Agents SDK to manage the agentic loop."""
+
+    def __init__(
+        self,
+        bedrock_model: str,
+        max_tokens: str,
+        system_prompt: str,
+        brave_api_key: str,
+    ):
+        self._bedrock_model_id = bedrock_model
+        self._max_tokens = int(max_tokens) if max_tokens else 1024
+        self._system_prompt = system_prompt
+
+        # Create the Brave reviews tool with the API key bound
+        get_computer_reviews = _create_get_computer_reviews(brave_api_key)
+
+        # Configure the Bedrock model provider
+        model = BedrockModel(
+            model_id=bedrock_model,
+            region_name="ap-southeast-2",
+            max_tokens=self._max_tokens,
+        )
+
+        # Create the Strands agent — handles the agentic loop internally
+        self._agent = Agent(
+            model=model,
+            system_prompt=system_prompt,
+            tools=[lookup_inventory_tool, get_computer_reviews, get_book_info],
+        )
+
+    def query(self, messages: list[dict]) -> dict:
+        """Invoke the Strands agent with conversation messages."""
+        logger.info("querying against model: %s", self._bedrock_model_id)
+
+        # Pass conversation history and invoke the agent with the last user message
+        # Strands Agent accepts messages for conversation context
+        self._agent.messages = messages
+
+        # Extract the last user message text to invoke the agent
+        last_user_text = self._extract_last_user_text(messages)
+
+        result = self._agent(last_user_text)
+
+        logger.info("response stop_reason: %s", result.stop_reason)
+
+        # Return the response in a format compatible with the existing API contract
+        return {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": result.message["content"][-1]["text"] if result.message.get("content") else str(result)}],
+                }
+            },
+            "stopReason": result.stop_reason,
+            "metrics": {},
+        }
+
+    @staticmethod
+    def _extract_last_user_text(messages: list[dict]) -> str:
+        """Extract the text from the last user message."""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                content = msg.get("content", [])
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and "text" in block:
+                            return block["text"]
+                        if isinstance(block, str):
+                            return block
+        return ""
